@@ -6,7 +6,8 @@ Plainly translates the web page you are reading, and does nothing else.
 
 The translation sits under each paragraph, or replaces the original if you
 prefer. Settings stay in your browser. Text goes straight to the model provider
-you configure. There is no Plainly server, no account, and no telemetry.
+you configure. There is no Plainly server, no account, and no telemetry. See
+the [privacy policy](./PRIVACY.md).
 
 ## What It Does
 
