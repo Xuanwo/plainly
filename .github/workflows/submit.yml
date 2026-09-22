@@ -36,21 +36,23 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run Tests
-        run: pnpm test --exclude="**/free-api.test.ts"
+        run: pnpm test
 
+      # Edge gets its own build: Edge Add-ons assigns its own ID and must not
+      # receive the Chrome Web Store key.
       - name: Build and Zip Extension
-        run: pnpm zip
-
-      - name: Upload Extension Zip to Release
-        run: gh release upload "${{ inputs.tag }}" .output/*-chrome.zip --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
+        run: |
+          pnpm zip
+          pnpm zip:edge
 
       - name: Submit to Chrome & Edge Stores
         run: |
-          pnpm wxt submit \
-            --chrome-zip .output/*-chrome.zip \
-            --edge-zip .output/*-chrome.zip
+          ARGS=(--chrome-zip .output/*-chrome.zip)
+          # Edge is optional until its Partner Center secrets are configured.
+          if [ -n "$EDGE_PRODUCT_ID" ]; then
+            ARGS+=(--edge-zip .output/*-edge.zip)
+          fi
+          pnpm wxt submit "${ARGS[@]}"
         env:
           DRY_RUN: ${{ inputs.dryRun }}
           CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}

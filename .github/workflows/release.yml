@@ -1,35 +1,43 @@
 name: Release Extension
 
+# Bump "version" in package.json, merge it, then push a matching tag
+# (e.g. v1.35.0). Store submission runs separately via submit.yml.
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to rebuild assets for (e.g., v1.30.1)"
+        description: "Existing release tag to rebuild assets for (e.g., v1.35.0)"
         required: true
         type: string
 
-concurrency: ${{ github.workflow }}-${{ github.ref }}
+concurrency: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+
+permissions:
+  contents: write
 
 jobs:
   release:
     name: Release Extension
     runs-on: ubuntu-latest
     env:
-      SKIP_ENV_VALIDATION: true
+      TAG: ${{ inputs.tag || github.ref_name }}
       HUSKY: 0
     steps:
-      - name: Checkout Repo
-        if: github.event_name != 'workflow_dispatch'
-        uses: actions/checkout@v6
-
       - name: Checkout Release Tag
-        if: github.event_name == 'workflow_dispatch'
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag }}
+          ref: ${{ env.TAG }}
+
+      - name: Check Tag Matches package.json Version
+        run: |
+          VERSION=$(jq -r .version package.json)
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "Tag $TAG does not match package.json version $VERSION"
+            exit 1
+          fi
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -43,117 +51,21 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Create Release Pull Request or Tag
-        if: github.event_name != 'workflow_dispatch'
-        id: changesets
-        uses: changesets/action@v1
-        with:
-          commit: "chore(release): version packages"
-          title: "chore(release): version packages"
-          publish: pnpm run release
-          createGithubReleases: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SKIP_FREE_API: true
-
-      - name: Send Discord Notification
-        if: steps.changesets.outputs.published == 'true'
-        run: |
-          VERSION=$(echo '${{ steps.changesets.outputs.publishedPackages }}' | jq -r '.[0].version')
-          TAG="v$VERSION"
-          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$TAG"
-
-          # Get release notes
-          RELEASE_DATA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
-          RELEASE_NOTES=$(echo "$RELEASE_DATA" | jq -r '.body // "No release notes available"')
-
-          # Clean up release notes
-          if [ -n "$RELEASE_NOTES" ] && [ "$RELEASE_NOTES" != "No release notes available" ]; then
-            RELEASE_NOTES=$(echo "$RELEASE_NOTES" | sed 's/<!--[^>]*-->//g')
-            RELEASE_NOTES=$(echo "$RELEASE_NOTES" | \
-              sed 's/^## \(.*\)$/**\1**/g' | \
-              sed 's/^### \(.*\)$/▸ **\1**/g' | \
-              sed 's/^#### \(.*\)$/  • **\1**/g')
-            RELEASE_NOTES=$(echo "$RELEASE_NOTES" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-            if [ ${#RELEASE_NOTES} -gt 800 ]; then
-              RELEASE_NOTES=$(echo "$RELEASE_NOTES" | head -c 800)
-              RELEASE_NOTES="${RELEASE_NOTES}..."
-            fi
-          fi
-
-          # Build Discord payload
-          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
-          if [ -n "$RELEASE_NOTES" ] && [ "$RELEASE_NOTES" != "No release notes available" ]; then
-            FIELDS_JSON=$(jq -n --arg tag "$TAG" --arg notes "$RELEASE_NOTES" \
-              '[{"name": "🏷️ Tag", "value": ("`" + $tag + "`"), "inline": true}, {"name": "📝 Release Notes", "value": $notes, "inline": false}]')
-          else
-            FIELDS_JSON=$(jq -n --arg tag "$TAG" \
-              '[{"name": "🏷️ Tag", "value": ("`" + $tag + "`"), "inline": true}]')
-          fi
-
-          DISCORD_PAYLOAD=$(jq -n \
-            --arg version "$VERSION" \
-            --arg url "$RELEASE_URL" \
-            --argjson fields "$FIELDS_JSON" \
-            --arg timestamp "$TIMESTAMP" \
-            '{
-              embeds: [{
-                title: "Plainly Release!",
-                description: ("**Plainly** version `" + $version + "` has been released!"),
-                url: $url,
-                color: 48253,
-                fields: $fields,
-                footer: { text: "GitHub Actions", icon_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" },
-                timestamp: $timestamp
-              }]
-            }')
-
-          # Send to Discord
-          RESPONSE=$(curl -s -w "%{http_code}" -H "Content-Type: application/json" -X POST -d "$DISCORD_PAYLOAD" ${{ secrets.DISCORD_WEBHOOK_URL }})
-          HTTP_CODE=$(echo "$RESPONSE" | tail -c 4)
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "✅ Discord notification sent"
-          else
-            echo "❌ Discord notification failed (HTTP $HTTP_CODE)"
-          fi
+      - name: Run Tests
+        run: pnpm test
 
       - name: Build and Zip Extension
-        if: steps.changesets.outputs.published == 'true' || github.event_name == 'workflow_dispatch'
         run: pnpm zip:all
 
-      - name: Upload Extension Zip to Release
-        if: steps.changesets.outputs.published == 'true' || github.event_name == 'workflow_dispatch'
+      - name: Create GitHub Release
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            VERSION=$(echo '${{ steps.changesets.outputs.publishedPackages }}' | jq -r '.[0].version')
-            TAG="v$VERSION"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"
           fi
-
-          gh release upload "$TAG" .output/*-chrome.zip .output/*-edge.zip .output/*-firefox.zip .output/*-sources.zip --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
-      # - name: Submit to Chrome & Edge Stores
-      #   if: steps.changesets.outputs.published == 'true'
-      #   run: |
-      #     ZIP_FILE=$(ls .output/*-chrome.zip)
-      #     echo "Uploading: $ZIP_FILE"
-
-      #     # Verify manifest version before upload
-      #     MANIFEST_VERSION=$(unzip -p "$ZIP_FILE" manifest.json | jq -r '.version')
-      #     echo "Manifest version: $MANIFEST_VERSION"
-
-      #     pnpm wxt submit \
-      #       --chrome-zip "$ZIP_FILE" \
-      #       --edge-zip "$ZIP_FILE"
-      #   env:
-      #     CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
-      #     CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
-      #     CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
-      #     CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
-      #     EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}
-      #     EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
-      #     EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+      - name: Upload Extension Zips to Release
+        run: gh release upload "$TAG" .output/*-chrome.zip .output/*-edge.zip .output/*-firefox.zip .output/*-sources.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
