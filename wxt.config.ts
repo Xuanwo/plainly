@@ -1,10 +1,10 @@
 import { defineConfig } from "wxt"
 
-// Public key of the Chrome Web Store item. It pins the extension ID so unpacked
-// builds share storage with the store install. The store assigns this key and
-// rejects a first upload that already carries one, so it stays unset until the
-// item exists. Edge Add-ons assigns its own ID, so Edge builds never carry it.
-const chromeExtensionKey: string | undefined = undefined
+// Public key of the Chrome Web Store item (ID bjfjdmmojplcohcbmkoogopanjbojmok).
+// It pins the extension ID so unpacked builds share storage with the store
+// install, and store updates must carry the same key. Edge Add-ons assigns its
+// own ID, so Edge builds never carry it.
+const chromeExtensionKey = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArGLEeLSKiXq0HLH6nW+zdCRA4CriidImKKHBs2FkXeB2iJJ16JcRd8qWvStt1YMCdDPtiXzfYdlDGv61HXA+0+ebGt0tF6bRP+YTrD5y8t9rhhhU4i8G1lpiP3tso1yWWDhX2W4Ng8K/B32EsT0iE30HqFO8MM0K0RggjBnc0n+brfW/5l69w5J3uRo8rjVQAuAJOH7anNqa9h3hPM1TNFj3wR7zTOMC6BfASEJtOD8ypDQQRZPuo/0+Tzcm7l4KokErO4ZW48J+/pBIL08j+BPRnVG3g4yO5J/Fv/6rQANtliMd5bxYqDK6WgJWqGneUU36E7NU8FozFO8peE7bIQIDAQAB"
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
@@ -16,7 +16,7 @@ export default defineConfig({
     name: "__MSG_extName__",
     description: "__MSG_extDescription__",
     default_locale: "en",
-    ...(browser === "chrome" && chromeExtensionKey ? { key: chromeExtensionKey } : {}),
+    ...(browser === "chrome" && { key: chromeExtensionKey }),
     permissions: [
       "storage",
       "tabs",
